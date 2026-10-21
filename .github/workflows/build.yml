@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,7 +20,14 @@ jobs:
         with:
           gradle-version: "8.10.2"
       - run: gradle assembleDebug --no-daemon
+      - run: cp app/build/outputs/apk/debug/app-debug.apk CarTV.apk
       - uses: actions/upload-artifact@v4
         with:
           name: CarTV-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: CarTV.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: CarTV (latest build)
+          files: CarTV.apk
+          make_latest: true
