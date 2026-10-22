@@ -2,34 +2,31 @@
 
 A web browser for the Android Auto screen. Sideloaded, not in the Play Store, so Google can't pull it.
 
-## Build the APK (no computer needed)
+## Download
 
-1. Create a free GitHub account and a new **private** repository named `CarTV`.
-2. Upload the contents of this folder (keep the `.github` folder, it holds the build script).
-3. Open the repo's **Actions** tab. The "Build APK" run starts on its own (or tap *Run workflow*).
-4. When it finishes (about 5 minutes), open the run and download **CarTV-apk**. Unzip it to get `app-debug.apk`.
+Every push to `main` builds a new APK. Latest (sign in to GitHub in your phone's browser first):
+https://github.com/soykevingon/cartv/releases/latest/download/CarTV.apk
 
-## Install on the phone
+Install it the same way you installed the first one (KingInstaller if Android Auto only showed it that way).
+Builds are signed with a fixed key (`app/cartv.keystore`), so updates install over the old version and keep your sign-ins.
 
-1. Open the APK and allow installs from your browser/files app when asked.
-2. Open **CarTV** on the phone and tap **Allow location**, then choose **Allow all the time**.
+## On the phone (CarTV app)
 
-## Turn on unknown sources in Android Auto
+- **Allow location** → "Allow all the time". Used only to detect when you're parked.
+- **Allow microphone** for voice search on YouTube (may or may not work through the car's mic).
+- **Open browser**: sign in to YouTube/Google, find a video, tap **Send to car**.
+- **Ad blocker** on/off.
+- **Home page tiles**: one per line, `Name | website`.
 
-1. Phone Settings → search **Android Auto** → open its settings.
-2. Scroll to the bottom and tap **Version** about 10 times until it says developer settings are on.
-3. Menu (⋮) → **Developer settings** → enable **Unknown sources**.
-4. Reconnect to the car. CarTV appears in the Android Auto app launcher.
+## On the car screen
 
-## Using it
-
-- Tap the page to click. Drag (or use the arrows) to scroll; pinch to zoom.
-- **Go** opens a search box plus shortcuts. **Back**, **Home**, **Reload** do what they say.
-- If drag-scroll doesn't respond, tap the pan (crosshair) button first.
-- Video blocks itself when GPS speed goes above ~11 km/h and resumes after 5 seconds stopped.
+- **☰ floating button**: Home, Search (on-screen keyboard), Back, Reload, Move button.
+- **Move button**: tap it, then tap where you want the button to live.
+- The small ☰ in the corner is required by Android Auto; it opens the same menu.
+- Tap to click, drag or use the arrows to scroll, pinch to zoom.
+- Video blocks itself above ~11 km/h and resumes after 5 seconds stopped.
 
 ## Limits
 
-- **Netflix won't play.** It needs DRM (Widevine) that an embedded browser doesn't provide.
-- The car's keyboard is disabled by Android Auto while moving.
-- A big Android Auto update could break the unknown-sources setting; re-check it if CarTV disappears.
+- **Netflix won't play**: it refuses Android browsers, and its DRM video renders black on the car screen surface.
+- YouTube changes its ad delivery often; if ads come back, the ad-skip script may need an update.

@@ -2,16 +2,20 @@ package com.cartv.app
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.Gravity
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
-/** Phone-side screen: grant location (for the parked lock) and set the home page. */
+/** Phone-side setup: permissions, sign-in browser, ad blocker, home page tiles. */
 class MainActivity : Activity() {
 
     private lateinit var status: TextView
@@ -23,45 +27,66 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad * 2, pad, pad)
         }
+        fun label(t: String, size: Float = 16f) = TextView(this).apply {
+            text = t; textSize = size; setPadding(0, pad, 0, pad / 3)
+        }
+        fun btn(t: String, onClick: () -> Unit) = Button(this).apply {
+            text = t; isAllCaps = false; setOnClickListener { onClick() }
+        }
 
         layout.addView(TextView(this).apply { text = "CarTV"; textSize = 28f })
-        status = TextView(this).apply { textSize = 16f; setPadding(0, pad, 0, pad) }
+        status = TextView(this).apply { textSize = 15f; setPadding(0, pad / 2, 0, pad / 2) }
         layout.addView(status)
-
-        layout.addView(Button(this).apply {
-            text = "Allow location"
-            setOnClickListener { requestLocation() }
+        layout.addView(btn("Allow location") { requestLocation() })
+        layout.addView(btn("Allow microphone (voice search)") {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 3)
         })
 
-        layout.addView(TextView(this).apply { text = "\nHome page"; textSize = 16f })
-        val home = EditText(this).apply { setText(Prefs.home(this@MainActivity)); setSingleLine() }
-        layout.addView(home)
-        layout.addView(Button(this).apply {
-            text = "Save home page"
-            setOnClickListener {
-                Prefs.setHome(this@MainActivity, Prefs.resolve(home.text.toString()))
-                Toast.makeText(this@MainActivity, "Saved", Toast.LENGTH_SHORT).show()
+        layout.addView(label("Browser"))
+        layout.addView(btn("Open browser — sign in, pick a video, send it to the car") {
+            startActivity(Intent(this, PhoneBrowserActivity::class.java))
+        })
+        layout.addView(CheckBox(this).apply {
+            text = "Ad blocker"
+            isChecked = Prefs.adblock(this@MainActivity)
+            setOnCheckedChangeListener { _, on ->
+                Prefs.setAdblock(this@MainActivity, on)
+                Toast.makeText(this@MainActivity, "Applies next time CarTV opens", Toast.LENGTH_SHORT).show()
             }
+        })
+
+        layout.addView(label("Home page tiles — one per line:  Name | website"))
+        val sites = EditText(this).apply {
+            setText(Prefs.sitesRaw(this@MainActivity))
+            minLines = 3
+            gravity = Gravity.TOP
+        }
+        layout.addView(sites)
+        layout.addView(btn("Save tiles") {
+            Prefs.setSitesRaw(this@MainActivity, sites.text.toString())
+            Toast.makeText(this@MainActivity, "Saved", Toast.LENGTH_SHORT).show()
         })
 
         layout.addView(TextView(this).apply {
             textSize = 14f
             setPadding(0, pad, 0, 0)
             text = "Video is blocked while the car is moving (GPS speed). " +
-                "Choose \"Allow all the time\" so it works while Android Auto is on the car screen.\n\n" +
-                "Netflix won't play here (it requires DRM a browser view can't provide). YouTube works."
+                "Choose \"Allow all the time\" for location so it works while Android Auto is running.\n\n" +
+                "Netflix won't play: it blocks Android browsers, and its protected video can't be drawn on the car screen."
         })
-        setContentView(layout)
+        setContentView(ScrollView(this).apply { addView(layout) })
     }
 
     override fun onResume() {
         super.onResume()
-        status.text = when {
+        val loc = when {
             !has(Manifest.permission.ACCESS_FINE_LOCATION) -> "Location: not allowed (video stays blocked)"
             Build.VERSION.SDK_INT >= 29 && !has(Manifest.permission.ACCESS_BACKGROUND_LOCATION) ->
                 "Location: only while open. Tap again and pick \"Allow all the time\"."
-            else -> "Location: allowed. Ready."
+            else -> "Location: allowed"
         }
+        val mic = if (has(Manifest.permission.RECORD_AUDIO)) "Microphone: allowed" else "Microphone: not allowed"
+        status.text = "$loc\n$mic"
     }
 
     private fun requestLocation() {

@@ -25,9 +25,11 @@ jobs:
         with:
           name: CarTV-apk
           path: CarTV.apk
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: CarTV (latest build)
-          files: CarTV.apk
-          make_latest: true
+      - name: Publish direct download
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --cleanup-tag -y || true
+          gh release create latest CarTV.apk --title "CarTV (latest build)" \
+            --notes "Built from ${GITHUB_SHA::7}" --target "$GITHUB_SHA"

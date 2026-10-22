@@ -1,8 +1,9 @@
 package com.cartv.app
 
-import android.annotation.SuppressLint
 import android.app.Presentation
+import android.content.Context
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.Handler
@@ -13,12 +14,10 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
-import android.webkit.CookieManager
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.car.app.AppManager
 import androidx.car.app.CarContext
@@ -30,10 +29,16 @@ import androidx.lifecycle.LifecycleOwner
 /**
  * Draws a real WebView onto the Android Auto screen.
  * Android Auto hands us a Surface (the "map" area of a navigation app); we put a
- * VirtualDisplay on it and show a Presentation holding the WebView. Taps/scrolls
- * from the car screen are forwarded to the WebView.
+ * VirtualDisplay on it and show a Presentation holding the WebView plus our own
+ * overlays (floating menu, keyboard). Taps from the car screen are forwarded in.
  */
 class BrowserRenderer(private val carContext: CarContext) : SurfaceCallback, DefaultLifecycleObserver {
+
+    companion object {
+        /** The live car browser, so the phone can send pages to it. */
+        var current: BrowserRenderer? = null
+            private set
+    }
 
     private val handler = Handler(Looper.getMainLooper())
     private var virtualDisplay: VirtualDisplay? = null
@@ -41,8 +46,15 @@ class BrowserRenderer(private val carContext: CarContext) : SurfaceCallback, Def
     private var root: FrameLayout? = null
     private var webView: WebView? = null
     private var blocker: TextView? = null
+    private var fab: TextView? = null
+    private var menuLayer: FrameLayout? = null
+    private var menuPanel: LinearLayout? = null
+    private var keyboard: OnScreenKeyboard? = null
+    private var banner: TextView? = null
     private var customView: View? = null
-    private var customCallback: WebChromeClient.CustomViewCallback? = null
+    private var customCallback: android.webkit.WebChromeClient.CustomViewCallback? = null
+    private var moveMode = false
+    private var fabSize = 0
     private var blockState = ParkedMonitor.State.PARKED
 
     private val parked = ParkedMonitor(carContext) { s -> handler.post { applyBlock(s) } }
@@ -63,66 +75,113 @@ class BrowserRenderer(private val carContext: CarContext) : SurfaceCallback, Def
         val surface = container.surface ?: return
         release()
         val dm = carContext.getSystemService(DisplayManager::class.java)
-        val vd = dm.createVirtualDisplay(
-            "CarTV", container.width, container.height, container.dpi, surface, 0
-        )
+        val vd = dm.createVirtualDisplay("CarTV", container.width, container.height, container.dpi, surface, 0)
         virtualDisplay = vd
         val p = Presentation(carContext, vd.display)
         p.setContentView(buildViews(p.context))
         p.show()
         presentation = p
+        current = this
         applyBlock(blockState)
     }
 
     override fun onSurfaceDestroyed(container: SurfaceContainer) = release()
 
     private fun release() {
-        webView?.let { webView?.url?.let { u -> Prefs.setLast(carContext, u) }; it.destroy() }
+        if (current === this) current = null
+        webView?.let { wv -> wv.url?.let { Prefs.setLast(carContext, it) }; wv.destroy() }
         webView = null
         customView = null
         presentation?.dismiss()
         presentation = null
         virtualDisplay?.release()
         virtualDisplay = null
-        root = null
-        blocker = null
+        root = null; blocker = null; fab = null; menuLayer = null; menuPanel = null; keyboard = null; banner = null
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun buildViews(ctx: android.content.Context): View {
+    private fun buildViews(ctx: Context): View {
+        val d = ctx.resources.displayMetrics.density
+        fun px(dp: Int) = (dp * d).toInt()
         val frame = FrameLayout(ctx).apply { setBackgroundColor(Color.BLACK) }
 
-        val wv = WebView(ctx).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.mediaPlaybackRequiresUserGesture = false
-            settings.loadWithOverviewMode = true
-            settings.useWideViewPort = true
-            settings.setSupportZoom(true)
-            settings.builtInZoomControls = true
-            settings.displayZoomControls = false
-            webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    // Stay inside the browser; block intent:// links that try to open other apps.
-                    val scheme = request.url.scheme ?: return true
-                    return scheme != "http" && scheme != "https"
-                }
-                override fun onPageFinished(view: WebView, url: String) {
-                    Prefs.setLast(carContext, url)
-                }
+        val wv = WebView(ctx)
+        Web.setup(wv, carContext)
+        wv.webViewClient = CarTvClient(carContext)
+        wv.webChromeClient = object : CarTvChrome(carContext) {
+            override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                customView?.let { frame.removeView(it) }
+                customView = view
+                customCallback = callback
+                frame.addView(view, 1, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             }
-            webChromeClient = object : WebChromeClient() {
-                override fun onShowCustomView(view: View, callback: CustomViewCallback) {
-                    customView?.let { frame.removeView(it) }
-                    customView = view
-                    customCallback = callback
-                    frame.addView(view, 1, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-                }
-                override fun onHideCustomView() = hideCustomView()
+            override fun onHideCustomView() = hideCustomView()
+        }
+        frame.addView(wv, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+
+        // Floating menu button (drag substitute: "Move button" then tap where it should go).
+        fabSize = px(58)
+        val fabView = TextView(ctx).apply {
+            text = "☰"
+            textSize = 26f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#CC1E1E2E"))
+                setStroke(px(2), Color.parseColor("#66FFFFFF"))
+            }
+            setOnClickListener { toggleMenu() }
+        }
+        frame.addView(fabView, FrameLayout.LayoutParams(fabSize, fabSize))
+
+        // Menu: full-screen catcher (tap outside closes) holding the panel.
+        val panel = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(px(6), px(6), px(6), px(6))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#EE1E1E2E")); cornerRadius = 18 * d
             }
         }
-        CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
-        frame.addView(wv, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        listOf<Pair<String, () -> Unit>>(
+            "Home" to { load(Web.HOME_URL) },
+            "Search" to { showKeyboard() },
+            "Back" to { goBack() },
+            "Reload" to { reload() },
+            "Move button" to { startMove() },
+        ).forEach { (label, action) ->
+            panel.addView(TextView(ctx).apply {
+                text = label
+                textSize = 20f
+                setTextColor(Color.WHITE)
+                minWidth = px(190)
+                setPadding(px(18), px(14), px(18), px(14))
+                setOnClickListener { hideMenu(); action() }
+            })
+        }
+        val layer = FrameLayout(ctx).apply {
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener { hideMenu() }
+        }
+        layer.addView(panel, FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+        frame.addView(layer, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+
+        val kb = OnScreenKeyboard(ctx,
+            onSubmit = { q -> hideKeyboard(); load(Prefs.searchUrl(q, webView?.url)) },
+            onClose = { hideKeyboard() })
+        frame.addView(kb.view, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+
+        val ban = TextView(ctx).apply {
+            text = "Tap where you want the menu button"
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            setPadding(px(18), px(10), px(18), px(10))
+            background = GradientDrawable().apply { setColor(Color.parseColor("#EE000000")); cornerRadius = 12 * d }
+            visibility = View.GONE
+        }
+        frame.addView(ban, FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+            topMargin = px(12)
+        })
 
         val block = TextView(ctx).apply {
             setBackgroundColor(Color.BLACK)
@@ -134,9 +193,10 @@ class BrowserRenderer(private val carContext: CarContext) : SurfaceCallback, Def
         }
         frame.addView(block, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
 
-        root = frame
-        webView = wv
-        blocker = block
+        frame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> placeFab() }
+
+        root = frame; webView = wv; blocker = block; fab = fabView
+        menuLayer = layer; menuPanel = panel; keyboard = kb; banner = ban
         wv.loadUrl(Prefs.last(carContext))
         return frame
     }
@@ -147,6 +207,59 @@ class BrowserRenderer(private val carContext: CarContext) : SurfaceCallback, Def
         customCallback?.onCustomViewHidden()
         customCallback = null
     }
+
+    // ---- Floating menu ----
+
+    private fun placeFab() {
+        val r = root ?: return
+        val f = fab ?: return
+        val (fx, fy) = Prefs.fab(carContext)
+        f.x = fx * (r.width - fabSize).coerceAtLeast(0)
+        f.y = fy * (r.height - fabSize).coerceAtLeast(0)
+    }
+
+    fun toggleMenu() {
+        if (blocked) return
+        if (menuLayer?.visibility == View.VISIBLE) hideMenu() else showMenu()
+    }
+
+    private fun showMenu() {
+        val r = root ?: return
+        val f = fab ?: return
+        val p = menuPanel ?: return
+        keyboard?.hide()
+        p.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
+        val pw = p.measuredWidth
+        val ph = p.measuredHeight
+        val gap = fabSize / 6f
+        val x = if (f.x + fabSize / 2f > r.width / 2f) f.x - pw - gap else f.x + fabSize + gap
+        val y = f.y + fabSize / 2f - ph / 2f
+        p.x = x.coerceIn(0f, (r.width - pw).coerceAtLeast(0).toFloat())
+        p.y = y.coerceIn(0f, (r.height - ph).coerceAtLeast(0).toFloat())
+        menuLayer?.visibility = View.VISIBLE
+    }
+
+    private fun hideMenu() { menuLayer?.visibility = View.GONE }
+
+    private fun startMove() {
+        moveMode = true
+        banner?.visibility = View.VISIBLE
+    }
+
+    private fun placeAt(x: Float, y: Float) {
+        val r = root ?: return
+        val fx = ((x - fabSize / 2f) / (r.width - fabSize).coerceAtLeast(1)).coerceIn(0f, 1f)
+        val fy = ((y - fabSize / 2f) / (r.height - fabSize).coerceAtLeast(1)).coerceIn(0f, 1f)
+        Prefs.setFab(carContext, fx, fy)
+        placeFab()
+        moveMode = false
+        banner?.visibility = View.GONE
+    }
+
+    // ---- Keyboard ----
+
+    private fun showKeyboard() { hideMenu(); keyboard?.show() }
+    private fun hideKeyboard() { keyboard?.hide() }
 
     // ---- Parked lock ----
 
@@ -163,6 +276,7 @@ class BrowserRenderer(private val carContext: CarContext) : SurfaceCallback, Def
                     "Paused while driving.\nIt resumes when the car is parked."
                 else
                     "Open CarTV on your phone and allow location\n(used only to detect when you're parked)."
+                hideMenu(); hideKeyboard()
                 b.visibility = View.VISIBLE
                 b.bringToFront()
                 webView?.evaluateJavascript(
@@ -174,11 +288,13 @@ class BrowserRenderer(private val carContext: CarContext) : SurfaceCallback, Def
     }
 
     private val blocked get() = blockState != ParkedMonitor.State.PARKED
+    private val overlayOpen get() = menuLayer?.visibility == View.VISIBLE || keyboard?.isShowing == true
 
-    // ---- Controls from the car screen ----
+    // ---- Input from the car screen ----
 
     override fun onClick(x: Float, y: Float) {
         if (blocked) return
+        if (moveMode) { placeAt(x, y); return }
         val target = root ?: return
         val t = SystemClock.uptimeMillis()
         val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, x, y, 0)
@@ -194,31 +310,30 @@ class BrowserRenderer(private val carContext: CarContext) : SurfaceCallback, Def
     }
 
     override fun onScroll(distanceX: Float, distanceY: Float) {
-        if (blocked || customView != null) return
+        if (blocked || overlayOpen || customView != null) return
         webView?.evaluateJavascript("window.scrollBy($distanceX,$distanceY)", null)
     }
 
     override fun onFling(velocityX: Float, velocityY: Float) {
-        if (blocked || customView != null) return
+        if (blocked || overlayOpen || customView != null) return
         webView?.evaluateJavascript(
             "window.scrollBy({left:${-velocityX * 0.3f},top:${-velocityY * 0.3f},behavior:'smooth'})", null
         )
     }
 
     override fun onScale(focusX: Float, focusY: Float, scaleFactor: Float) {
-        if (blocked) return
+        if (blocked || overlayOpen) return
         webView?.zoomBy(scaleFactor.coerceIn(0.5f, 2f))
     }
 
     fun scrollPage(direction: Int) {
-        if (blocked) return
+        if (blocked || overlayOpen) return
         webView?.evaluateJavascript(
             "window.scrollBy({top:${direction}*window.innerHeight*0.8,behavior:'smooth'})", null
         )
     }
 
     fun load(url: String) { hideCustomView(); webView?.loadUrl(url) }
-    fun goHome() = load(Prefs.home(carContext))
     fun reload() { webView?.reload() }
     fun goBack() {
         when {

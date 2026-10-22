@@ -11,14 +11,25 @@ android {
         applicationId = "com.cartv.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    // Fixed key so every build can install over the previous one (keeps your sign-ins).
+    signingConfigs {
+        create("cartv") {
+            storeFile = file("cartv.keystore")
+            storePassword = "cartvpass"
+            keyAlias = "cartv"
+            keyPassword = "cartvpass"
+        }
     }
 
     buildTypes {
+        debug { signingConfig = signingConfigs.getByName("cartv") }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("cartv")
         }
     }
 
@@ -34,4 +45,5 @@ android {
 dependencies {
     implementation("androidx.car.app:app:1.4.0")
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.webkit:webkit:1.12.1")
 }
