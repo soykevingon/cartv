@@ -45,8 +45,8 @@ class ParkedMonitor(
         val speed = if (loc.hasSpeed()) loc.speed else 0f // m/s
         val now = SystemClock.elapsedRealtime()
         when {
-            speed >= 30000f -> { slowSince = 0L; emit(State.MOVING) }
-            speed < 100000f -> {
+            speed >= 3f -> { slowSince = 0L; emit(State.MOVING) }
+            speed < 1f -> {
                 if (slowSince == 0L) slowSince = now
                 if (now - slowSince >= 5000L) emit(State.PARKED)
             }

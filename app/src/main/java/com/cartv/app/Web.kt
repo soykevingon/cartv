@@ -4,6 +4,8 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Message
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
@@ -29,6 +31,9 @@ object Web {
         s.setSupportZoom(true)
         s.builtInZoomControls = true
         s.displayZoomControls = false
+        // Pop-up windows, needed for "Sign in with Google" on sites like Patreon.
+        s.setSupportMultipleWindows(true)
+        s.javaScriptCanOpenWindowsAutomatically = true
         // Look like regular Chrome so Google lets you sign in.
         s.userAgentString = s.userAgentString
             .replace("; wv", "")
@@ -44,7 +49,12 @@ object Web {
     }
 }
 
-open class CarTvClient(private val ctx: Context) : WebViewClient() {
+/** @param track save pages as "last page" (off for sign-in pop-ups). */
+open class CarTvClient(
+    private val ctx: Context,
+    private val writer: String,
+    private val track: Boolean = true,
+) : WebViewClient() {
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         // Stay inside CarTV; block intent:// links that try to open other apps.
         val scheme = request.url.scheme ?: return true
@@ -60,13 +70,26 @@ open class CarTvClient(private val ctx: Context) : WebViewClient() {
         return null
     }
 
+    // YouTube changes videos without a full page load; this catches those too.
+    override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+        if (track && url != null && !isReload) Prefs.setLast(ctx, url, writer)
+    }
+
     override fun onPageFinished(view: WebView, url: String) {
-        Prefs.setLast(ctx, url)
         CookieManager.getInstance().flush()
     }
 }
 
-open class CarTvChrome(private val ctx: Context) : WebChromeClient() {
+/** @param addPopup where to show a pop-up window (sign-in screens). */
+open class CarTvChrome(
+    private val ctx: Context,
+    private val writer: String,
+    private val addPopup: (WebView) -> Unit,
+) : WebChromeClient() {
+
+    var popup: WebView? = null
+        private set
+
     override fun onPermissionRequest(request: PermissionRequest) {
         val micOk = ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         val allowed = request.resources.filter {
@@ -74,5 +97,31 @@ open class CarTvChrome(private val ctx: Context) : WebChromeClient() {
                 (it == PermissionRequest.RESOURCE_AUDIO_CAPTURE && micOk)
         }
         if (allowed.isEmpty()) request.deny() else request.grant(allowed.toTypedArray())
+    }
+
+    override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+        closePopup()
+        val w = WebView(view.context)
+        Web.setup(w, ctx)
+        w.webViewClient = CarTvClient(ctx, writer, track = false)
+        w.webChromeClient = this
+        addPopup(w)
+        popup = w
+        (resultMsg.obj as WebView.WebViewTransport).webView = w
+        resultMsg.sendToTarget()
+        return true
+    }
+
+    override fun onCloseWindow(window: WebView) {
+        if (window === popup) closePopup()
+    }
+
+    /** @return true if a pop-up was open. */
+    fun closePopup(): Boolean {
+        val w = popup ?: return false
+        popup = null
+        (w.parent as? ViewGroup)?.removeView(w)
+        w.destroy()
+        return true
     }
 }

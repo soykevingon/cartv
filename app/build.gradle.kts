@@ -11,8 +11,8 @@ android {
         applicationId = "com.cartv.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     // Fixed key so every build can install over the previous one (keeps your sign-ins).

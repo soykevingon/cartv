@@ -26,7 +26,10 @@ object Prefs {
         }
 
     fun last(ctx: Context): String = p(ctx).getString("last", null) ?: Web.HOME_URL
-    fun setLast(ctx: Context, url: String) = p(ctx).edit().putString("last", url).apply()
+    /** Who saved the last page: "car" or "phone". Lets each side pick up where the other left off. */
+    fun lastWriter(ctx: Context): String = p(ctx).getString("lastWriter", "") ?: ""
+    fun setLast(ctx: Context, url: String, writer: String) =
+        p(ctx).edit().putString("last", url).putString("lastWriter", writer).apply()
 
     fun adblock(ctx: Context): Boolean = p(ctx).getBoolean("adblock", true)
     fun setAdblock(ctx: Context, on: Boolean) = p(ctx).edit().putBoolean("adblock", on).apply()
